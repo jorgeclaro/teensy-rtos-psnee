@@ -56,7 +56,7 @@ void FASTRUN patchBios(bool thread) {
 	PRINTLN("Init Pal BIOS patch");
 	digitalWriteFast(LED_BUILTIN, HIGH);
 	
-	DDRD &= B01110111;
+	DDRD &= B11110111;
 	DDRD &= B11101111;
 	//pinMode(BIOS_A18, INPUT);
 	//pinMode(BIOS_D2, INPUT);
