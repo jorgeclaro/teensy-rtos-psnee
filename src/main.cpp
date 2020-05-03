@@ -67,6 +67,10 @@ void FASTRUN patchBios(bool thread) {
 	while (!digitalReadFast(BIOS_A18)) {
 		if((millis() - now) > bios_patch_timeout) {
 			PRINTLN("A18 intro pulse not found - Quitting Bios patch");
+            DDRD &= B11110111;
+            DDRD &= B11101111;
+            //pinMode(BIOS_A18, INPUT);
+            //pinMode(BIOS_D2, INPUT);
 			digitalWriteFast(LED_BUILTIN, LOW);
 			return;
 		}
@@ -81,6 +85,10 @@ void FASTRUN patchBios(bool thread) {
 	while (!digitalReadFast(BIOS_A18)) {
 		if((millis() - now) > bios_patch_timeout) {
 			PRINTLN("A18 priming pulse not found - Quitting Bios patch");
+            DDRD &= B11110111;
+            DDRD &= B11101111;
+            //pinMode(BIOS_A18, INPUT);
+            //pinMode(BIOS_D2, INPUT);
 			digitalWriteFast(LED_BUILTIN, LOW);
 			return;
 		}
