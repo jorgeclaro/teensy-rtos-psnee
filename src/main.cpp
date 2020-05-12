@@ -17,20 +17,48 @@ static const unsigned char SCEEData[] = {0b01011001, 0b11001001, 0b01001011, 0b0
 static const unsigned char SCEAData[] = {0b01011001, 0b11001001, 0b01001011, 0b01011101, 0b11111010, 0b00000010};
 static const unsigned char SCEIData[] = {0b01011001, 0b11001001, 0b01001011, 0b01011101, 0b11011010, 0b00000010};
 
-static const int scex_injection_bits_delay = 4000;					// microseconds 250 bits/s (ATtiny 8Mhz works from 3950 to 4100)
-static const int scex_injection_loop_delay = 90;					// milliseconds 72 in oldcrow. PU-22+ work best with 80 to 100 
-static const int scex_injection_loops = 2;							// 2 cycles seems optimal to cover all boards
-static const int scex_injection_attempts = 3;						// 3 attempts seems optimal to cover all boards
-static const int subq_capture_timeout = 2000;						// microseconds
+// microseconds 250 bits/s (ATtiny 8Mhz works from 3950 to 4100)
+static const int scex_injection_bits_delay = 4000;
+
+// milliseconds 72 in oldcrow. PU-22+ work best with 80 to 100
+static const int scex_injection_loop_delay = 90;
+
+// 2 cycles seems optimal to cover all boards
+static const int scex_injection_loops = 2;
+
+// 3 attempts seems optimal to cover all boards
+static const int scex_injection_attempts = 3;
+
+// microseconds
+static const int subq_capture_timeout = 2000;
+
+// syntetic value
 static const int subq_woble_hysteresis = 14;
-static const int board_detection_sample_period = 1000;				// milliseconds
-static const int board_detection_sample_interval = 1;				// milliseconds
-static const int board_detection_gate_wfck_lows_threshold = 20;		// readings in board_detection_sample_period
-static const int board_detection_sqck_highs_threshold = 100;		// readings in board_detection_sample_period
-static const int bios_patch_stage1_delay = 1350;					// milliseconds
-static const int bios_patch_stage2_delay = 17;						// microseconds
-static const int bios_patch_stage3_delay = 4;						// microseconds
-static const int bios_patch_timeout = 5000;							// milliseconds
+
+// milliseconds
+static const int board_detection_sample_period = 1000;
+
+// milliseconds
+static const int board_detection_sample_interval = 1;
+
+// readings in board_detection_sample_period
+static const int board_detection_gate_wfck_lows_threshold = 20;
+
+// readings in board_detection_sample_period
+static const int board_detection_sqck_highs_threshold = 100;
+
+// milliseconds
+static const int bios_patch_stage1_delay = 1350;
+
+// microseconds
+static const int bios_patch_stage2_delay = 17;
+
+// microseconds
+static const int bios_patch_stage3_delay = 4;
+
+// milliseconds
+static const int bios_patch_timeout = 5000;
+
 
 boolean power = false;
 boolean pu22mode = false;
