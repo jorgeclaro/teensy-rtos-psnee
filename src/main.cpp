@@ -125,13 +125,13 @@ void FASTRUN patchBios(bool thread) {
 	// max 17us for 16Mhz ATmega (maximize this when tuning!)
 	delayMicroseconds(bios_patch_stage2_delay);
 	
-    digitalWriteFast(BIOS_A18, LOW);
+	digitalWriteFast(BIOS_A18, LOW);
 	digitalWriteFast(BIOS_D2, HIGH);
-    
+	
 	// min 2us for 16Mhz ATmega, 8Mhz requires 3us (minimize this when tuning, after maximizing first us delay!)
 	delayMicroseconds(bios_patch_stage3_delay);
 	
-    digitalWriteFast(BIOS_D2, LOW);
+	digitalWriteFast(BIOS_D2, LOW);
 
 	DDRD &= B11110111;
 	DDRD &= B11101111;
