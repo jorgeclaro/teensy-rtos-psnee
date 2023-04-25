@@ -59,7 +59,6 @@ static const int bios_patch_stage3_delay = 4;
 // milliseconds
 static const int bios_patch_timeout = 5000;
 
-
 boolean power = false;
 boolean pu22mode = false;
 QueueHandle_t subqReadsQueue;
@@ -80,66 +79,81 @@ bool readBit(int index, const unsigned char *ByteSet) {
 	return (0 != (bits & mask));
 }
 
-void FASTRUN patchBios(bool thread) {
-	PRINTLN("Init Pal BIOS patch");
+void setupPatchBios() {
 	digitalWriteFast(LED_BUILTIN, HIGH);
-	
-	DDRD &= B11110111;
+    DDRD &= B11110111;
 	DDRD &= B11101111;
 	//pinMode(BIOS_A18, INPUT);
 	//pinMode(BIOS_D2, INPUT);
+}
 
-	uint32_t now = millis();
+bool waitA18IntroPulse() {
+    PRINTLN("Wait for stage 1 A18 intro pulse");
 	
-	PRINTLN("Wait for stage 1 A18 intro pulse");
+	uint32_t now = millis();
+
 	while (!digitalReadFast(BIOS_A18)) {
 		if((millis() - now) > bios_patch_timeout) {
-			PRINTLN("A18 intro pulse not found - Quitting Bios patch");
-            DDRD &= B11110111;
-            DDRD &= B11101111;
-            //pinMode(BIOS_A18, INPUT);
-            //pinMode(BIOS_D2, INPUT);
-			digitalWriteFast(LED_BUILTIN, LOW);
-			return;
+			PRINTLN("A18 intro pulse not found - Quitting BIOS patch");
+			return false;
 		}
 	};
+
+	return true;
+}
+
+bool stage1PatchBios(bool thread) {	
+	if (!waitA18IntroPulse()) {
+		return false;
+	}
 
 	PRINTLN("Wait through stage 1 of A18 activity");
 	thread ? vTaskDelay(bios_patch_stage1_delay) : delay(bios_patch_stage1_delay);
 
-	now = millis();
-	
-	PRINTLN("Wait for priming A18 pulse");
-	while (!digitalReadFast(BIOS_A18)) {
-		if((millis() - now) > bios_patch_timeout) {
-			PRINTLN("A18 priming pulse not found - Quitting Bios patch");
-            DDRD &= B11110111;
-            DDRD &= B11101111;
-            //pinMode(BIOS_A18, INPUT);
-            //pinMode(BIOS_D2, INPUT);
-			digitalWriteFast(LED_BUILTIN, LOW);
-			return;
-		}
+	if (!waitA18IntroPulse()) {
+		return false;
 	}
 
-	// max 17us for 16Mhz ATmega (maximize this when tuning!)
+	return true;
+}
+
+void stage2PatchBios() {
+    // max 17us for 16Mhz ATmega (maximize this when tuning!)
 	delayMicroseconds(bios_patch_stage2_delay);
-	
 	digitalWriteFast(BIOS_A18, LOW);
 	digitalWriteFast(BIOS_D2, HIGH);
-	
-	// min 2us for 16Mhz ATmega, 8Mhz requires 3us (minimize this when tuning, after maximizing first us delay!)
-	delayMicroseconds(bios_patch_stage3_delay);
-	
-	digitalWriteFast(BIOS_D2, LOW);
+}
 
+void stage3PatchBios() {
+    // min 2us for 16Mhz ATmega, 8Mhz requires 3us (minimize this when tuning, after maximizing first us delay!)
+	delayMicroseconds(bios_patch_stage3_delay);
+	digitalWriteFast(BIOS_D2, LOW);
+}
+
+void clearPatchBios() {
 	DDRD &= B11110111;
 	DDRD &= B11101111;
 	//pinMode(BIOS_A18, INPUT);
 	//pinMode(BIOS_D2, INPUT);
-
-	PRINTLN("Done Pal BIOS patch");
 	digitalWriteFast(LED_BUILTIN, LOW);
+}
+
+void FASTRUN patchBios(bool thread) {
+	PRINTLN("Init PAL BIOS patch");
+
+    setupPatchBios();
+	
+	if (!stage1PatchBios(thread)) {
+		clearPatchBios();
+		return;
+	}
+	
+	stage2PatchBios();
+	stage3PatchBios();
+
+	clearPatchBios();
+	
+	PRINTLN("Completed PAL BIOS patch");
 }
 
 static void Thread0(void* arg) {
