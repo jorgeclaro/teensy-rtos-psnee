@@ -15,6 +15,10 @@ Includes PSOne PAL BIOS Patch
 
 - [Teensy 4.0](https://www.pjrc.com/store/teensy40.html)
 
+## Installation
+
+- [PsNee Installation Guide](./images/PsNee-modchip-installation-guide.pdf)
+
 ## References
 
 - [PsNee](https://github.com/kalymos/PsNee)
