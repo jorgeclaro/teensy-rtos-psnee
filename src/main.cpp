@@ -165,69 +165,66 @@ static void Thread0(void* arg) {
 	boolean mode_tmp;
 	boolean power_tmp;
 
-	//pinMode(SQCK, INPUT);
-	//pinMode(GATE_WFCK, INPUT);
 	
  	PRINTLN("Thread 0 : Board Detection");
 
 	while (1) {
-		for(;;) {
+		// Board detection
+		//
+		// GATE: __-----------------------  // this is a PU-7 .. PU-20 board!
+		//
+		// WFCK: __-_-_-_-_-_-_-_-_-_-_-_-  // this is a PU-22 or newer board!
+		
+		now = millis();
+		sqck_highs = 0;
+		sqck_lows = 0;
+		gate_wfck_lows = 0;
+		gate_wfck_highs = 0;
+		gate_wfck_lows = 0;
 
-			// Board detection
-			//
-			// GATE: __-----------------------  // this is a PU-7 .. PU-20 board!
-			//
-			// WFCK: __-_-_-_-_-_-_-_-_-_-_-_-  // this is a PU-22 or newer board!
-			
-			now = millis();
-			sqck_highs = 0;
-			sqck_lows = 0;
-			gate_wfck_lows = 0;
-			gate_wfck_highs = 0;
-			gate_wfck_lows = 0;
-
-			while ((millis() - now) < board_detection_sample_period) {
-				if(digitalReadFast(SQCK)==1) sqck_highs++;
-				if(digitalReadFast(SQCK)==0) sqck_lows++;
-				if(digitalReadFast(GATE_WFCK)==1) gate_wfck_highs++;
-				if(digitalReadFast(GATE_WFCK)==0) gate_wfck_lows++;
-				//1ms interval -> 1000 reads
-				vTaskDelay(board_detection_sample_interval);
-			}
-
-			power_tmp = sqck_highs > board_detection_sqck_highs_threshold ? true : false;
-			
-			if(power == false && power_tmp == true) {
-				xSemaphoreGive(patchBiosSem);
-			}
-
-			power = power_tmp;
-
-			PRINT("sqck_highs: ");
-			PRINTLN(sqck_highs);
-			PRINT("sqck_lows: ");
-			PRINTLN(sqck_lows);
-			PRINT("power: ");
-			PRINTLN(power_tmp);
-			
-			mode_tmp = gate_wfck_lows > board_detection_gate_wfck_lows_threshold ? true : false;
-			pu22mode = mode_tmp;
-			
-			PRINT("gate_wfck_lows: ");
-			PRINTLN(gate_wfck_lows);
-			PRINT("mode: ");
-			PRINTLN(mode_tmp);
+		while ((millis() - now) < board_detection_sample_period) {
+			if(digitalReadFast(SQCK)==1) sqck_highs++;
+			if(digitalReadFast(SQCK)==0) sqck_lows++;
+			if(digitalReadFast(GATE_WFCK)==1) gate_wfck_highs++;
+			if(digitalReadFast(GATE_WFCK)==0) gate_wfck_lows++;
+			// 1ms interval -> 1000 reads
+			vTaskDelay(board_detection_sample_interval);
 		}
+
+		power_tmp = sqck_highs > board_detection_sqck_highs_threshold ? true : false;
+		
+		if(power == false && power_tmp == true) {
+			xSemaphoreGive(patchBiosSem);
+		}
+
+		power = power_tmp;
+
+		PRINT("sqck_highs: ");
+		PRINTLN(sqck_highs);
+		PRINT("sqck_lows: ");
+		PRINTLN(sqck_lows);
+		PRINT("power_tmp: ");
+		PRINTLN(power_tmp);
+		PRINT("power: ");
+		PRINTLN(power);
+		
+		mode_tmp = gate_wfck_lows > board_detection_gate_wfck_lows_threshold ? true : false;
+		pu22mode = mode_tmp;
+		
+		PRINT("gate_wfck_lows: ");
+		PRINTLN(gate_wfck_lows);
+		PRINT("mode_tmp: ");
+		PRINTLN(mode_tmp);
+		PRINT("pu22mode: ");
+		PRINTLN(pu22mode);
 	}
 }
 
 static void Thread1(void* arg) {
 	PRINTLN("Thread 1 : Patch Bios");
 	while(1) {
-		for(;;) {
-			xSemaphoreTake(patchBiosSem, portMAX_DELAY);
-			patchBios(true);
-		}
+		xSemaphoreTake(patchBiosSem, portMAX_DELAY);
+		patchBios(true);
 	}
 }
 
@@ -238,56 +235,52 @@ static void Thread2(void* arg) {
 
 	uint32_t now;
 
-	//pinMode(SUBQ, INPUT);
-
 	PRINTLN("Thread 2 : Capture SUBQ Packets");
 	
 	while (1) {
-		for(;;) {
-			now = micros();
-			bitbuf = 0;
-			sample = 0;
+		now = micros();
+		bitbuf = 0;
+		sample = 0;
 
-			for (byte scpos = 0; scpos < 12; scpos++) {
-				for (byte bitpos = 0; bitpos < 8; bitpos++) {
-					while (digitalReadFast(SQCK) == 1) {
-						// wait for clock to go high
-						// timeout resets the 12 byte stream in case the PSX sends malformatted clock pulses, as happens on bootup
-						if((micros() - now) > subq_capture_timeout) {
-							// reset SUBQ packet stream
-							scpos = 0;
-							bitbuf = 0;
-							now = micros();
-							continue;
-						}
+		for (byte scpos = 0; scpos < 12; scpos++) {
+			for (byte bitpos = 0; bitpos < 8; bitpos++) {
+				while (digitalReadFast(SQCK) == 1) {
+					// wait for clock to go high
+					// timeout resets the 12 byte stream in case the PSX sends malformatted clock pulses, as happens on bootup
+					if((micros() - now) > subq_capture_timeout) {
+						// reset SUBQ packet stream
+						scpos = 0;
+						bitbuf = 0;
+						now = micros();
+						continue;
 					}
-
-					// wait for clock to go low
-					while ((digitalReadFast(SQCK)) == 0);
-					
-					sample = digitalReadFast(SUBQ);
-					bitbuf |= sample << bitpos;
-
-					// no problem with this bit
-					now = micros();
 				}
-	
-				scbuf[scpos] = bitbuf;
-				bitbuf = 0;
+
+				// wait for clock to go low
+				while ((digitalReadFast(SQCK)) == 0);
+				
+				sample = digitalReadFast(SUBQ);
+				bitbuf |= sample << bitpos;
+
+				// no problem with this bit
+				now = micros();
 			}
 
-			for (byte scpos = 0; scpos < 12; scpos++) {
-				if (scbuf[scpos] < 0x10) {
-					PRINT("0");
-				}
-				//printhex(scbuf[scpos], HEX);
-				PRINT_HEX(scbuf[scpos]);
-				PRINT(" ");
-			}
-			PRINTLN("");
-			
-			xQueueSend(subqReadsQueue, scbuf, portMAX_DELAY);
+			scbuf[scpos] = bitbuf;
+			bitbuf = 0;
 		}
+
+		for (byte scpos = 0; scpos < 12; scpos++) {
+			if (scbuf[scpos] < 0x10) {
+				PRINT("0");
+			}
+			//printhex(scbuf[scpos], HEX);
+			PRINT_HEX(scbuf[scpos]);
+			PRINT(" ");
+		}
+		PRINTLN("");
+		
+		xQueueSend(subqReadsQueue, scbuf, portMAX_DELAY);
 	}
 }
 
@@ -298,112 +291,104 @@ static void Thread3(void* arg) {
 	PRINTLN("Thread 3 : Check Woble Area");
 
 	while (1) {
-		for(;;) {
-			// check if read head is in wobble area
-			// We only want to unlock game discs (0x41) and only if the read head is in the outer TOC area.
-			// We want to see a TOC sector repeatedly before injecting (helps with timing and marginal lasers).
-			// All this logic is because we don't know if the HC-05 is actually processing a getSCEX() command.
-			// Hysteresis is used because older drives exhibit more variation in read head positioning.
-			// While the laser lens moves to correct for the error, they can pick up a few TOC sectors.
+		// check if read head is in wobble area
+		// We only want to unlock game discs (0x41) and only if the read head is in the outer TOC area.
+		// We want to see a TOC sector repeatedly before injecting (helps with timing and marginal lasers).
+		// All this logic is because we don't know if the HC-05 is actually processing a getSCEX() command.
+		// Hysteresis is used because older drives exhibit more variation in read head positioning.
+		// While the laser lens moves to correct for the error, they can pick up a few TOC sectors.
 
-			xQueueReceive(subqReadsQueue, scbuf, portMAX_DELAY);
+		xQueueReceive(subqReadsQueue, scbuf, portMAX_DELAY);
 
-			boolean isDataSector = (((scbuf[0] & 0x40) == 0x40) && (((scbuf[0] & 0x10) == 0) && ((scbuf[0] & 0x80) == 0)));
+		boolean isDataSector = (((scbuf[0] & 0x40) == 0x40) && (((scbuf[0] & 0x10) == 0) && ((scbuf[0] & 0x80) == 0)));
 
-			if (
-				(isDataSector &&  scbuf[1] == 0x00 &&  scbuf[6] == 0x00) &&   // [0] = 41 means psx game disk. the other 2 checks are garbage protection
-				(scbuf[2] == 0xA0 || scbuf[2] == 0xA1 || scbuf[2] == 0xA2 ||  // if [2] = A0, A1, A2 ..
-				(scbuf[2] == 0x01 && (scbuf[3] >= 0x98 || scbuf[3] <= 0x02))) // .. or = 01 but then [3] is either > 98 or < 02
-			) {
-				hysteresis++;
-			} else if (hysteresis > 0 &&
-				((scbuf[0] == 0x01 || isDataSector) && (scbuf[1] == 0x00) &&  scbuf[6] == 0x00)
-			) {
-				// This CD has the wobble into CD-DA space
-				// started at 0x41, then went into 0x01
-				hysteresis++;
-			} else if (hysteresis > 0) {
-				// None of the above
-				// Initial detection was noise
-				// Decrease the counter
-				hysteresis--; 
-			}
-
-			PRINT("hysteresis: ");
-			PRINTLN(hysteresis);
-
-			if (hysteresis >= subq_woble_hysteresis) {
-				PRINTLN("Is in woble area");
-				hysteresis = 11;
-
-				xSemaphoreGive(injectScexSem);
-				continue;
-			}
-
-			PRINTLN("Not in woble area");
+		if (
+			(isDataSector &&  scbuf[1] == 0x00 &&  scbuf[6] == 0x00) &&   // [0] = 41 means psx game disk. the other 2 checks are garbage protection
+			(scbuf[2] == 0xA0 || scbuf[2] == 0xA1 || scbuf[2] == 0xA2 ||  // if [2] = A0, A1, A2 ..
+			(scbuf[2] == 0x01 && (scbuf[3] >= 0x98 || scbuf[3] <= 0x02))) // .. or = 01 but then [3] is either > 98 or < 02
+		) {
+			hysteresis++;
+		} else if (hysteresis > 0 &&
+			((scbuf[0] == 0x01 || isDataSector) && (scbuf[1] == 0x00) &&  scbuf[6] == 0x00)
+		) {
+			// This CD has the wobble into CD-DA space
+			// started at 0x41, then went into 0x01
+			hysteresis++;
+		} else if (hysteresis > 0) {
+			// None of the above
+			// Initial detection was noise
+			// Decrease the counter
+			hysteresis--; 
 		}
+
+		PRINT("hysteresis: ");
+		PRINTLN(hysteresis);
+
+		if (hysteresis >= subq_woble_hysteresis) {
+			PRINTLN("Is in woble area");
+			hysteresis = 11;
+
+			xSemaphoreGive(injectScexSem);
+			continue;
+		}
+
+		PRINTLN("Not in woble area");
 	}
 }
 
 static void Thread4(void* arg) {
-	//pinMode(LED_BUILTIN, OUTPUT);
-	//pinMode(DATA, INPUT);
-
 	PRINTLN("Thread 4 : Inject SCEX");
 		
 	while (1) {
-		for(;;) {
-			xSemaphoreTake(injectScexSem, portMAX_DELAY);
-			
-			// HC-05 waits for a bit of silence (pin low) before it begins decoding
-			vTaskDelay(scex_injection_loop_delay);
-			
-			digitalWriteFast(LED_BUILTIN, HIGH);
+		xSemaphoreTake(injectScexSem, portMAX_DELAY);
+		
+		// HC-05 waits for a bit of silence (pin low) before it begins decoding
+		vTaskDelay(scex_injection_loop_delay);
+		
+		digitalWriteFast(LED_BUILTIN, HIGH);
 
-			for (unsigned int loop_counter = 0; loop_counter < scex_injection_loops; loop_counter++) {
-				for (unsigned int attempts_counter = 0; attempts_counter < scex_injection_attempts; attempts_counter++) {
-					for (byte bit_counter = 0; bit_counter < 44; bit_counter++) {
-						const char region = 'e';
-						if (readBit(bit_counter, region == 'e' ? SCEEData : region == 'a' ? SCEAData : SCEIData ) == false) {
+		for (unsigned int loop_counter = 0; loop_counter < scex_injection_loops; loop_counter++) {
+			for (unsigned int attempts_counter = 0; attempts_counter < scex_injection_attempts; attempts_counter++) {
+				for (byte bit_counter = 0; bit_counter < 44; bit_counter++) {
+					const char region = 'e';
+					if (readBit(bit_counter, region == 'e' ? SCEEData : region == 'a' ? SCEAData : SCEIData ) == false) {
+						DDRB |= B00000001;
+						//pinModeFast(DATA, OUTPUT);
+						digitalWriteFast(DATA, LOW);
+						delayMicroseconds(scex_injection_bits_delay);
+					} else {
+						if (pu22mode) {
 							DDRB |= B00000001;
-							//DDRB |= 0;
 							//pinModeFast(DATA, OUTPUT);
-							digitalWriteFast(DATA, LOW);
-							delayMicroseconds(scex_injection_bits_delay);
+							unsigned long now = micros();
+							do {
+								// output wfck signal on data pin
+								digitalWriteFast(DATA, digitalReadFast(GATE_WFCK));
+							} while ((micros() - now) < scex_injection_bits_delay);
 						} else {
-							if (pu22mode) {
-								DDRB |= B00000001;
-								//pinModeFast(DATA, OUTPUT);
-								unsigned long now = micros();
-								do {
-									// output wfck signal on data pin
-									digitalWriteFast(DATA, digitalReadFast(GATE_WFCK));
-								} while ((micros() - now) < scex_injection_bits_delay);
-							} else {
-								DDRB &= B11111110;
-								//pinModeFast(DATA, INPUT);
-								delayMicroseconds(scex_injection_bits_delay);
-							}
+							DDRB &= B11111110;
+							//pinModeFast(DATA, INPUT);
+							delayMicroseconds(scex_injection_bits_delay);
 						}
 					}
-
-					DDRB |= B00000001;
-					//pinModeFast(DATA, OUTPUT);
-					digitalWriteFast(DATA, LOW);
 				}
-				vTaskDelay(scex_injection_loop_delay);
+
+				DDRB |= B00000001;
+				//pinModeFast(DATA, OUTPUT);
+				digitalWriteFast(DATA, LOW);
 			}
-
-			if (!pu22mode) {
-				DDRD &= B01111111;
-				//pinModeFast(GATE_WFCK, INPUT);
-			}
-
-			DDRB &= B11111110;
-			//pinModeFast(DATA, INPUT);
-
-			digitalWriteFast(LED_BUILTIN, LOW);
+			vTaskDelay(scex_injection_loop_delay);
 		}
+
+		if (!pu22mode) {
+			DDRD &= B01111111;
+			//pinModeFast(GATE_WFCK, INPUT);
+		}
+
+		DDRB &= B11111110;
+		//pinModeFast(DATA, INPUT);
+
+		digitalWriteFast(LED_BUILTIN, LOW);
 	}
 }
 
