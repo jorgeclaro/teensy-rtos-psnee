@@ -10,13 +10,14 @@
 #define DEBUG true
 
 // RTOS config
-#define LOGGER_BUFFER_SIZE 256
+#define LOGGER_BUFFER_SIZE 128
 #define MAX_MSG_SIZE 100
 #define MAX_TASK_NUM 20
 
-// SUBQ Packet config
+// PSX config
 #define SUBQ_PACKET_LENGTH 12
-#define SUBQ_QUEUE_SIZE 5
+#define SUBQ_QUEUE_SIZE 1
+#define SCEX_SEM_COUNT 5
 
 // Pin definitions
 #define BIOS_A18 4      // connect to PSOne BIOS A18 (pin 31 on that chip)
@@ -31,14 +32,20 @@ static const unsigned char SCEEData[] = {0b01011001, 0b11001001, 0b01001011, 0b0
 static const unsigned char SCEAData[] = {0b01011001, 0b11001001, 0b01001011, 0b01011101, 0b11111010, 0b00000010};
 static const unsigned char SCEIData[] = {0b01011001, 0b11001001, 0b01001011, 0b01011101, 0b11011010, 0b00000010};
 
-// microseconds 250 bits/s (ATtiny 8Mhz works from 3950 to 4100)
+// Specified region
+static const char region = 'e';
+
+// microseconds 250 bits/s (3950 ~ 4100)
 static const int scex_injection_bits_delay = 4000;
 
-// milliseconds 72 in oldcrow. PU-22+ work best with 80 to 100
-static const int scex_injection_loop_delay = 90;
+// milliseconds (PU-22+ work best with 80 to 100)
+static const int scex_injection_loop_delay_pu22 = 90;
+
+// milliseconds (72 work best with oldcrow)
+static const int scex_injection_loop_delay_oldcrow = 72;
 
 // nr injection loops (2 to cover all boards)
-static const int scex_injection_loops = 3;
+static const int scex_injection_loops = 2;
 
 // nr attempts for scex (3 to cover all boards)
 static const int scex_injection_attempts = 3;
@@ -62,7 +69,7 @@ static const int board_detection_sqck_highs_threshold = 100;
 static const int bios_patch_stage1_delay = 1250;
 
 // nr attempts stage1 2
-static const int bios_patch_stage1_attempts = 2;
+static const int bios_patch_stage1_attempts = 1;
 
 // microseconds 17
 static const int bios_patch_stage2_delay = 17;
@@ -80,6 +87,8 @@ QueueHandle_t subqRawDataQueue;
 QueueHandle_t pu22modeQueue;
 QueueHandle_t powerQueue;
 
+SemaphoreHandle_t powerSem;
+SemaphoreHandle_t pu22modeSem;
 SemaphoreHandle_t injectScexSem;
 SemaphoreHandle_t patchBiosSem;
 
@@ -114,41 +123,6 @@ typedef struct {
 } SUBQDriveDataPoint;
 
 
-SCQKGateWFCKDriveDataPoint createSCQKGateWFCKDataPoint(
-    unsigned int gate_wfck_highs,
-    unsigned int gate_wfck_lows,
-    unsigned int sqck_highs,
-    unsigned int sqck_lows
-) {
-    SCQKGateWFCKDriveDataPoint p = {
-        gate_wfck_highs,
-        gate_wfck_lows,
-        sqck_highs,
-        sqck_lows
-    };
-    return p;
-}
-
-SUBQDriveDataPoint createSUBQDataPoint(
-    boolean isDataSector,
-    boolean hasWobbleInCDDASpace,
-    boolean option1,
-    boolean option2,
-    boolean garbageCollectionCheck,
-    boolean isGameDisk,
-    boolean checkingWobble
-) {
-    SUBQDriveDataPoint p = {
-        isDataSector,
-        hasWobbleInCDDASpace,
-        option1,
-        option2,
-        garbageCollectionCheck,
-        isGameDisk,
-        checkingWobble,
-    };
-    return p;
-}
 
 /*
 char* formatStringMalloc(const char* format, ...) {
@@ -163,6 +137,27 @@ char* formatStringMalloc(const char* format, ...) {
     return buffer;
 }
 */
+
+/**
+ * Uses the ARM Cortex-M7 DWT cycle counter for precise microsecond delays.
+ */
+void delayMicrosecondsDWT(uint32_t us) {
+    uint32_t start = ARM_DWT_CYCCNT; // Get current cycle count
+    uint32_t target = (F_CPU / 1000000) * us; // Convert microseconds to cycles
+
+    while ((ARM_DWT_CYCCNT - start) < target) {
+        // Busy-wait until the required cycle count is reached
+    }
+}
+
+/**
+ * Enables the DWT (Data Watchpoint and Trace) cycle counter.
+ * Must be called once at startup.
+ */
+void enableDWT() {
+    ARM_DEMCR |= ARM_DEMCR_TRCENA; // Enable trace
+    ARM_DWT_CTRL |= ARM_DWT_CTRL_CYCCNTENA; // Enable cycle counter
+}
 
 void sendRTOSMsg(const char* message) {
     if (DEBUG) {
@@ -220,13 +215,13 @@ void patchBios() {
     sendRTOSMsg("A18 intro pulse exausted all attempts");
     
     if (pulseFound) {
-        // max 17us for 16Mhz ATmega (maximize this when tuning!)
-        delayMicroseconds(bios_patch_stage2_delay);
+        // max 17us (maximize this when tuning!)
+        delayMicrosecondsDWT(bios_patch_stage2_delay);
         digitalWriteFast(BIOS_A18, arduino::LOW);
         digitalWriteFast(BIOS_D2, arduino::HIGH);
 
-        // min 2us for 16Mhz ATmega, 8Mhz requires 3us (minimize this when tuning, after maximizing first us delay!)
-        delayMicroseconds(bios_patch_stage3_delay);
+        // min 2us (minimize this when tuning, after maximizing first us delay!)
+        delayMicrosecondsDWT(bios_patch_stage3_delay);
         digitalWriteFast(BIOS_D2, arduino::LOW);
     } else {
         sendRTOSMsg("Failed to patch PAL BIOS");
@@ -269,6 +264,13 @@ void checkPower(unsigned int sqck_highs) {
 }
 
 void checkPu22mode(unsigned int gate_wfck_lows) {
+
+    // Board detection
+    //
+    // GATE: __-----------------------  // this is a PU-7 .. PU-20 board!
+    //
+    // WFCK: __-_-_-_-_-_-_-_-_-_-_-_-  // this is a PU-22 or newer board!
+  
     boolean pu22mode = false;
 
     // Attempt to peek the queue, only set pu22mode to false if the peek fails
@@ -282,7 +284,7 @@ void checkPu22mode(unsigned int gate_wfck_lows) {
     // Only proceed if the pu22mode state has changed
     if (pu22mode != pu22mode_tmp) {
         if (pu22mode_tmp) {
-            sendRTOSMsg("PU22 mode");
+            sendRTOSMsg("Pu22 mode");
         } else {
             sendRTOSMsg("Oldcrow mode");
         }
@@ -294,13 +296,6 @@ void checkPu22mode(unsigned int gate_wfck_lows) {
 }
 
 SCQKGateWFCKDriveDataPoint captureSQCKandGateWFCK() {
-  
-    // Board detection
-    //
-    // GATE: __-----------------------  // this is a PU-7 .. PU-20 board!
-    //
-    // WFCK: __-_-_-_-_-_-_-_-_-_-_-_-  // this is a PU-22 or newer board!
-  
     unsigned int gate_wfck_highs = 0;
     unsigned int gate_wfck_lows = 0;
     unsigned int sqck_highs = 0;
@@ -318,7 +313,12 @@ SCQKGateWFCKDriveDataPoint captureSQCKandGateWFCK() {
         vTaskDelay(pdMS_TO_TICKS(board_detection_sample_interval));
     }
 
-    SCQKGateWFCKDriveDataPoint p = createSCQKGateWFCKDataPoint(gate_wfck_highs, gate_wfck_lows, sqck_highs, sqck_lows);
+    SCQKGateWFCKDriveDataPoint p = {
+        gate_wfck_highs,
+        gate_wfck_lows,
+        sqck_highs,
+        sqck_lows
+    };
 
     return p;
 }
@@ -389,39 +389,46 @@ SUBQDriveDataPoint parseSUBQPacket(byte *scbuf_ptr) {
     boolean isGameDisk = isDataSector && (option1 || option2) && garbageCollectionCheck;
     boolean checkingWobble = hasWobbleInCDDASpace && garbageCollectionCheck;
 
-    SUBQDriveDataPoint p = createSUBQDataPoint(isDataSector, hasWobbleInCDDASpace, option1, option2, garbageCollectionCheck, isGameDisk, checkingWobble);
+    SUBQDriveDataPoint p = {
+        isDataSector,
+        hasWobbleInCDDASpace,
+        option1,
+        option2,
+        garbageCollectionCheck,
+        isGameDisk,
+        checkingWobble,
+    };
 
     return p;
 }
 
-void injectSCEX() {
+void injectSCEXLoop() {
     boolean pu22mode = false;
 
-    if (xQueuePeek(pu22modeQueue, &pu22mode, pdMS_TO_TICKS(0)) != pdPASS) {}
+    if (xQueuePeek(pu22modeQueue, &pu22mode, pdMS_TO_TICKS(0)) != pdPASS) {
+        sendRTOSMsg("Assuming Oldcrow");
+    }
 
+    sendRTOSMsg("SCEX inj begin");
     digitalWriteFast(arduino::LED_BUILTIN, arduino::HIGH);
 
-    for (unsigned int loop_counter = 0; loop_counter < scex_injection_loops; loop_counter++) {
-        // HC-05 waits for a bit of silence (pin low) before it begins decoding
-        vTaskDelay(scex_injection_loop_delay);
-        
-        for (unsigned int attempts_counter = 0; attempts_counter < scex_injection_attempts; attempts_counter++) {
+    for (size_t loop_counter = 0; loop_counter < scex_injection_loops; loop_counter++) {
+        for (size_t attempts_counter = 0; attempts_counter < scex_injection_attempts; attempts_counter++) {
             for (byte bit_counter = 0; bit_counter < 44; bit_counter++) {
-                const char region = 'e';
-                if (readBit(bit_counter, region == 'e' ? SCEEData : region == 'a' ? SCEAData : SCEIData ) == false) {
+                if (!readBit(bit_counter, region == 'e' ? SCEEData : region == 'a' ? SCEAData : SCEIData)) {
                     pinMode(DATA, arduino::OUTPUT);
                     digitalWriteFast(DATA, arduino::LOW);
-                    delayMicroseconds(scex_injection_bits_delay);
+                    delayMicrosecondsDWT(scex_injection_bits_delay);
                 } else {
                     if (pu22mode) {
                         pinMode(DATA, arduino::OUTPUT);
-                        unsigned long now = micros();
+                        uint32_t startCycles = ARM_DWT_CYCCNT;  // Capture start cycle count
                         do {
                             digitalWriteFast(DATA, digitalReadFast(GATE_WFCK));
-                        } while ((micros() - now) < scex_injection_bits_delay);
+                        } while ((ARM_DWT_CYCCNT - startCycles) < (F_CPU / 1000000) * scex_injection_bits_delay);
                     } else {
                         pinMode(DATA, arduino::INPUT);
-                        delayMicroseconds(scex_injection_bits_delay);
+                        delayMicrosecondsDWT(scex_injection_bits_delay);
                     }
                 }
             }
@@ -429,6 +436,9 @@ void injectSCEX() {
             pinMode(DATA, arduino::OUTPUT);
             digitalWriteFast(DATA, arduino::LOW);
         }
+
+        // HC-05 waits for a bit of silence (pin low) before it begins decoding
+        vTaskDelay(pdMS_TO_TICKS(pu22mode ? scex_injection_loop_delay_pu22 : scex_injection_loop_delay_oldcrow));
     }
 
     if (!pu22mode) {
@@ -437,7 +447,7 @@ void injectSCEX() {
 
     pinMode(DATA, arduino::INPUT);
     digitalWriteFast(arduino::LED_BUILTIN, arduino::LOW);
-    sendRTOSMsg("SCEX injection completed");
+    sendRTOSMsg("SCEX inj end");
 }
 
 void printStats() {
@@ -462,12 +472,10 @@ void printStats() {
 }
 
 void checkTaskCreation(BaseType_t result) {
-    if (result == pdPASS){
-        return;
+    if (result != pdPASS){
+        Serial.print("Task creation failed!\n");
+        for (;;);
     }
-
-    Serial.print("Task creation failed!\n");
-    for (;;);
 }
 
 static void ThreadLogger(void*) {
@@ -486,6 +494,8 @@ static void ThreadCaptureSQCKandQFCKData(void*) {
    for (;;) {
         p = captureSQCKandGateWFCK();
         xQueueOverwrite(scqkwfckDriveDataQueue, &p);
+        xSemaphoreGive(powerSem);
+        xSemaphoreGive(pu22modeSem);
         vTaskDelay(250);
     }
 }
@@ -493,9 +503,9 @@ static void ThreadCaptureSQCKandQFCKData(void*) {
 static void ThreadPower(void*) {
     SCQKGateWFCKDriveDataPoint p;
     for (;;) {
+        xSemaphoreTake(powerSem, portMAX_DELAY);
         if (xQueuePeek(scqkwfckDriveDataQueue, &p, pdMS_TO_TICKS(0)) == pdPASS) {
             checkPower(p.sqck_highs);
-            vTaskDelay(250);
         }
     }
 }
@@ -505,11 +515,11 @@ static void ThreadPu22mode(void*) {
     SCQKGateWFCKDriveDataPoint p;
 
     for (;;) {
+        xSemaphoreTake(pu22modeSem, portMAX_DELAY);
         if(xQueuePeek(powerQueue, &power, pdMS_TO_TICKS(0)) == pdPASS) {
             if (power) {
                 if (xQueuePeek(scqkwfckDriveDataQueue, &p, pdMS_TO_TICKS(0)) == pdPASS) {
                     checkPu22mode(p.gate_wfck_lows);
-                    vTaskDelay(250);
                 }
                 sendRTOSMsg("Suspending");
                 vTaskSuspend(tPu22modeHandler);
@@ -555,9 +565,9 @@ static void ThreadCheckSUBQWobleArea(void*) {
         xQueueReceive(subqRawDataQueue, &scbuf, portMAX_DELAY);
         p = parseSUBQPacket(scbuf_ptr);
 
-        if (p.isGameDisk && p.checkingWobble) {
+        if (p.isGameDisk || p.checkingWobble) {
             xSemaphoreGive(injectScexSem);
-            sendRTOSMsg("Allowing SCEX inject");
+            sendRTOSMsg("SCEX inj allow");
         }
     
         xQueueOverwrite(subqDriveDataQueue, &p);
@@ -567,7 +577,7 @@ static void ThreadCheckSUBQWobleArea(void*) {
 static void ThreadInjectSCEX(void*) {
    for (;;) {
         xSemaphoreTake(injectScexSem, portMAX_DELAY);
-        injectSCEX();
+        injectSCEXLoop();
     }
 }
 
@@ -614,7 +624,7 @@ static void ThreadDebug(void*) {
         taskEXIT_CRITICAL();
         */
 
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -634,8 +644,10 @@ FLASHMEM __attribute__((noinline)) void setup() {
     pinMode(GATE_WFCK, arduino::INPUT);
     pinMode(arduino::LED_BUILTIN, arduino::OUTPUT);
 
+    enableDWT();
+
     if (DEBUG) {
-        Serial.begin(0);
+        Serial.begin(115200);
         Serial.println(PSTR("Booting FreeRTOS kernel " tskKERNEL_VERSION_NUMBER ""));
         Serial.println(PSTR("Built by gcc " __VERSION__ " (newlib " _NEWLIB_VERSION ") on " __DATE__ ""));
         if (CrashReport) {
@@ -651,8 +663,10 @@ FLASHMEM __attribute__((noinline)) void setup() {
     subqRawDataQueue = xQueueCreate(SUBQ_QUEUE_SIZE, sizeof(byte) * SUBQ_PACKET_LENGTH);
     pu22modeQueue = xQueueCreate(1, sizeof(boolean));
     powerQueue = xQueueCreate(1, sizeof(boolean));
-    patchBiosSem = xSemaphoreCreateCounting(1, 0);
-    injectScexSem = xSemaphoreCreateCounting(1, 0);
+    powerSem = xSemaphoreCreateBinary();
+    pu22modeSem = xSemaphoreCreateBinary();
+    patchBiosSem = xSemaphoreCreateBinary();
+    injectScexSem = xSemaphoreCreateCounting(SCEX_SEM_COUNT, 0);
 
     checkTaskCreation(xTaskCreate(ThreadCaptureSQCKandQFCKData, "sqckqfck", 256, NULL, 1, &tCaptureSQCKandQFCKDataHandler));
     checkTaskCreation(xTaskCreate(ThreadPower, "power", 256, NULL, 1, &tPowerHandler));
@@ -666,7 +680,7 @@ FLASHMEM __attribute__((noinline)) void setup() {
         checkTaskCreation(xTaskCreate(ThreadLogger, "logger", 512, NULL, 1, &tLoggerHandler));
         //checkTaskCreation(xTaskCreate(ThreadPrintHexSUBQPackets, "hex", 256, NULL, 1, &tPrintHexSUBQPacketsHandler));
         //checkTaskCreation(xTaskCreate(ThreadStats, "stats", 512, NULL, 1, &tStatsHandler));
-        //checkTaskCreation(xTaskCreate(ThreadDebug, "debug", 128, NULL, 1, &tDebugHandler));
+        //checkTaskCreation(xTaskCreate(ThreadDebug, "debug", 256, NULL, 1, &tDebugHandler));
         //checkTaskCreation(xTaskCreate(ThreadBlinker, "blinker", 128, NULL, 1, &tBlinkerHandler));
     }
 
