@@ -375,7 +375,7 @@ void printHexSUBQPackets(byte *scbuf_ptr) {
     sendRTOSMsg(buffer);
 }
 
-void checkWobbleArea(byte *scbuf_ptr) {
+SUBQDriveDataPoint parseSUBQPacket(byte *scbuf_ptr) {
     // we only want to unlock game discs (0x41) and only if the read head is in the outer TOC area
     // we want to see a TOC sector repeatedly before injecting (helps with timing and marginal lasers)
     // all this logic is because we don't know if the HC-05 is actually processing a getSCEX() command
@@ -389,13 +389,9 @@ void checkWobbleArea(byte *scbuf_ptr) {
     boolean isGameDisk = isDataSector && (option1 || option2) && garbageCollectionCheck;
     boolean checkingWobble = hasWobbleInCDDASpace && garbageCollectionCheck;
 
-    if (isGameDisk && checkingWobble) {
-        xSemaphoreGive(injectScexSem);
-        sendRTOSMsg("Allowing SCEX inject");
-    }
-
     SUBQDriveDataPoint p = createSUBQDataPoint(isDataSector, hasWobbleInCDDASpace, option1, option2, garbageCollectionCheck, isGameDisk, checkingWobble);
-    xQueueOverwrite(subqDriveDataQueue, &p);
+
+    return p;
 }
 
 void injectSCEX() {
@@ -553,10 +549,18 @@ static void ThreadPrintHexSUBQPackets(void*) {
 static void ThreadCheckSUBQWobleArea(void*) {
     byte scbuf[SUBQ_PACKET_LENGTH] = { 0 };
     byte *scbuf_ptr = scbuf;
+    SUBQDriveDataPoint p;
 
    for (;;) {
         xQueueReceive(subqRawDataQueue, &scbuf, portMAX_DELAY);
-        checkWobbleArea(scbuf_ptr);
+        p = parseSUBQPacket(scbuf_ptr);
+
+        if (p.isGameDisk && p.checkingWobble) {
+            xSemaphoreGive(injectScexSem);
+            sendRTOSMsg("Allowing SCEX inject");
+        }
+    
+        xQueueOverwrite(subqDriveDataQueue, &p);
     }
 }
 
