@@ -17,7 +17,7 @@
 // PSX config
 #define SUBQ_PACKET_LENGTH 12
 #define SUBQ_QUEUE_SIZE 1
-#define SCEX_SEM_COUNT 5
+#define SCEX_INJ_TIMEOUT_MS 5000
 
 // Pin definitions
 #define BIOS_A18 4      // connect to PSOne BIOS A18 (pin 31 on that chip)
@@ -86,6 +86,7 @@ QueueHandle_t subqDriveDataQueue;
 QueueHandle_t subqRawDataQueue;
 QueueHandle_t pu22modeQueue;
 QueueHandle_t powerQueue;
+QueueHandle_t scexQueue;
 
 SemaphoreHandle_t powerSem;
 SemaphoreHandle_t pu22modeSem;
@@ -560,24 +561,36 @@ static void ThreadCheckSUBQWobleArea(void*) {
     byte scbuf[SUBQ_PACKET_LENGTH] = { 0 };
     byte *scbuf_ptr = scbuf;
     SUBQDriveDataPoint p;
+    boolean scexAllow = false;
+    TickType_t lastAllowTime = 0;
 
-   for (;;) {
+    for (;;) {
         xQueueReceive(subqRawDataQueue, &scbuf, portMAX_DELAY);
         p = parseSUBQPacket(scbuf_ptr);
 
         if (p.isGameDisk || p.checkingWobble) {
-            xSemaphoreGive(injectScexSem);
+            scexAllow = true;
+            lastAllowTime = xTaskGetTickCount();  // Reset timeout timer
             sendRTOSMsg("SCEX inj allow");
+        } else if (scexAllow && (xTaskGetTickCount() - lastAllowTime) > pdMS_TO_TICKS(SCEX_INJ_TIMEOUT_MS)) {
+            scexAllow = false;
+            sendRTOSMsg("SCEX inj timeout");
         }
-    
+
+        xQueueOverwrite(scexQueue, &scexAllow);
         xQueueOverwrite(subqDriveDataQueue, &p);
     }
 }
 
 static void ThreadInjectSCEX(void*) {
-   for (;;) {
-        xSemaphoreTake(injectScexSem, portMAX_DELAY);
-        injectSCEXLoop();
+    boolean scexAllow = false;
+
+    for (;;) {
+        if (xQueuePeek(scexQueue, &scexAllow, pdMS_TO_TICKS(0)) == pdPASS) {
+            if(scexAllow) {
+                injectSCEXLoop();
+            }
+        }
     }
 }
 
@@ -663,10 +676,10 @@ FLASHMEM __attribute__((noinline)) void setup() {
     subqRawDataQueue = xQueueCreate(SUBQ_QUEUE_SIZE, sizeof(byte) * SUBQ_PACKET_LENGTH);
     pu22modeQueue = xQueueCreate(1, sizeof(boolean));
     powerQueue = xQueueCreate(1, sizeof(boolean));
+    scexQueue = xQueueCreate(1, sizeof(boolean));
     powerSem = xSemaphoreCreateBinary();
     pu22modeSem = xSemaphoreCreateBinary();
     patchBiosSem = xSemaphoreCreateBinary();
-    injectScexSem = xSemaphoreCreateCounting(SCEX_SEM_COUNT, 0);
 
     checkTaskCreation(xTaskCreate(ThreadCaptureSQCKandQFCKData, "sqckqfck", 256, NULL, 1, &tCaptureSQCKandQFCKDataHandler));
     checkTaskCreation(xTaskCreate(ThreadPower, "power", 256, NULL, 1, &tPowerHandler));
