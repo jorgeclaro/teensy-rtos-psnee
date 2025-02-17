@@ -15,64 +15,30 @@
 #define DATA 8          // connect to point 6 in old modchip diagrams
 #define GATE_WFCK 9     // connect to point 5 in old modchip diagrams
 
-#define DEBUG true
-
 // RTOS config
-#define LOGGER_BUFFER_SIZE 128
-#define MAX_MSG_SIZE 100
-#define MAX_TASK_NUM 20
-
-// SUBQ Packet config
-#define SUBQ_PACKET_LENGTH 12
-#define SUBQ_QUEUE_SIZE 1
-
-// Scex inhection timeout
-#define SCEX_INJ_TIMEOUT_MS 5000
-
-// Microseconds 250 bits/s (3950 ~ 4100)
-#define SCEX_INJECTION_BITS_DELAY 4000
-
-// Milliseconds (PU-22+ work best with 80 to 100)
-#define SCEX_INJECTION_LOOP_DELAY_PU22 90
-
-// Milliseconds (72 work best with Oldcrow)
-#define SCEX_INJECTION_LOOP_DELAY_OLDCROW 72
-
-// Number of injection loops (2 to cover all boards)
-#define SCEX_INJECTION_LOOPS 2
-
-// Number of attempts for SCEX (3 to cover all boards)
-#define SCEX_INJECTION_ATTEMPTS 3
-
-// Microseconds 2000
-#define SUBQ_CAPTURE_TIMEOUT 2000
-
-// Milliseconds 1000
-#define BOARD_DETECTION_SAMPLE_PERIOD 1000
-
-// Milliseconds 1
-#define BOARD_DETECTION_SAMPLE_INTERVAL 1
-
-// Readings in BOARD_DETECTION_SAMPLE_PERIOD 20
-#define BOARD_DETECTION_GATE_WFCK_LOWS_THRESHOLD 20
-
-// Readings in BOARD_DETECTION_SAMPLE_PERIOD 100
-#define BOARD_DETECTION_SQCK_HIGHS_THRESHOLD 100
-
-// Milliseconds 1350
-#define BIOS_PATCH_STAGE1_DELAY 1250
-
-// Number of attempts for stage1 2
-#define BIOS_PATCH_STAGE1_ATTEMPTS 1
-
-// Microseconds 17
-#define BIOS_PATCH_STAGE2_DELAY 17
-
-// Microseconds 4
-#define BIOS_PATCH_STAGE3_DELAY 4
-
-// Milliseconds 3000
-#define BIOS_PATCH_TIMEOUT 2000
+#define DEBUG true                                      // Enables logger task
+#define LOGGER_BUFFER_SIZE 128                          // Logger buffer size
+#define LOGGER_MSG_MAX_SIZE 100                         // Maximum message size
+#define MAX_TASK_NUM 20                                 // Maximum number of tasks
+#define SUBQ_CAPTURE_TIMEOUT 2000                       // Timeout for SUBQ capture in microseconds (2000)
+#define SUBQ_PACKET_LENGTH 12                           // Length of SUBQ packets
+#define SUBQ_QUEUE_SIZE 1                               // Size of the SUBQ queue
+#define SCEX_INJECTION_TIMEOUT 5000                     // Timeout for SCEX injection in milliseconds (5000)
+#define SCEX_INJECTION_BITS_DELAY 4000                  // Bit delay for SCEX injection (3950 ~ 4100 microseconds)
+#define SCEX_INJECTION_LOOP_DELAY_PU22 90               // Loop delay for PU-22+ in milliseconds (80 ~ 100)
+#define SCEX_INJECTION_LOOP_DELAY_OLDCROW 72            // Loop delay for Oldcrow in milliseconds (72)
+#define SCEX_INJECTION_LOOPS 2                          // Number of SCEX injection loops (2 to cover all boards)
+#define SCEX_INJECTION_ATTEMPTS 3                       // Number of SCEX injection attempts (3 to cover all boards)
+#define BOARD_DETECTION_SAMPLE_PERIOD 1000              // Sample period for board detection in milliseconds (1000)
+#define BOARD_DETECTION_SAMPLE_INTERVAL 1               // Sample interval for board detection in milliseconds (1)
+#define BOARD_DETECTION_GATE_WFCK_LOWS_THRESHOLD 20     // Threshold for WFCK low readings (20)
+#define BOARD_DETECTION_SQCK_HIGHS_THRESHOLD 100        // Threshold for SQCK high readings (100)
+#define BIOS_PATCH true                                 // Enables Bios Patch task
+#define BIOS_PATCH_STAGE1_DELAY 1250                    // Delay for BIOS patch stage 1 in milliseconds (1250)
+#define BIOS_PATCH_STAGE1_ATTEMPTS 1                    // Number of attempts for BIOS patch stage 1 (1)
+#define BIOS_PATCH_STAGE2_DELAY 17                      // Delay for BIOS patch stage 2 in microseconds (17)
+#define BIOS_PATCH_STAGE3_DELAY 4                       // Delay for BIOS patch stage 3 in microseconds (4)
+#define BIOS_PATCH_TIMEOUT 2000                         // Timeout for BIOS patch in milliseconds (3000)
 
 // SCEX data
 static const unsigned char SCEEData[] = {0b01011001, 0b11001001, 0b01001011, 0b01011101, 0b11101010, 0b00000010};
@@ -124,21 +90,6 @@ typedef struct {
     boolean isGameDisk;
     boolean checkingWobble;
 } SUBQDriveDataPoint;
-
-
-/*
-char* formatStringMalloc(const char* format, ...) {
-    char* buffer = (char*)pvPortMalloc(MAX_MSG_SIZE);
-    if (buffer == NULL) {
-        return NULL;
-    }
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, MAX_MSG_SIZE, format, args);
-    va_end(args);
-    return buffer;
-}
-*/
 
 /**
  * Uses the ARM Cortex-M7 DWT cycle counter for precise microsecond delays.
@@ -251,7 +202,9 @@ void checkPower(unsigned int sqck_highs) {
         if (power_tmp) {
             sendRTOSMsg("Power on");
             sendRTOSMsg("Allowing path BIOS");
-            xSemaphoreGive(patchBiosSem);        
+            if (BIOS_PATCH) {
+                xSemaphoreGive(patchBiosSem);
+            }
         } else {
             sendRTOSMsg("Power off");
         }
@@ -460,9 +413,9 @@ void printStats() {
     taskCount = uxTaskGetSystemState(taskStatusArray, MAX_TASK_NUM, &totalRunTime);
 
     for (UBaseType_t i = 0; i < taskCount; i++) {
-        char log[MAX_MSG_SIZE];
+        char log[LOGGER_MSG_MAX_SIZE];
 
-        sniprintf(log, MAX_MSG_SIZE, "Task: %s\t State: %d\t Priority: %lu\t Stack: %lu\t  Runtime: %lu",
+        sniprintf(log, LOGGER_MSG_MAX_SIZE, "Task: %s\t State: %d\t Priority: %lu\t Stack: %lu\t  Runtime: %lu",
             taskStatusArray[i].pcTaskName,
             taskStatusArray[i].eCurrentState,
             (unsigned long)taskStatusArray[i].uxCurrentPriority,
@@ -481,7 +434,7 @@ void checkTaskCreation(BaseType_t result) {
 }
 
 static void ThreadLogger(void*) {
-    char receivedMessage[MAX_MSG_SIZE];
+    char receivedMessage[LOGGER_MSG_MAX_SIZE];
 
    for (;;) {
         if (xQueueReceive(loggerQueue, &receivedMessage, portMAX_DELAY)) {
@@ -573,7 +526,7 @@ static void ThreadCheckSUBQWobleArea(void*) {
             scexAllow = true;
             lastAllowTime = xTaskGetTickCount();  // Reset timeout timer
             sendRTOSMsg("SCEX inj allow");
-        } else if (scexAllow && (xTaskGetTickCount() - lastAllowTime) > pdMS_TO_TICKS(SCEX_INJ_TIMEOUT_MS)) {
+        } else if (scexAllow && (xTaskGetTickCount() - lastAllowTime) > pdMS_TO_TICKS(SCEX_INJECTION_TIMEOUT)) {
             scexAllow = false;
             sendRTOSMsg("SCEX inj timeout");
         }
@@ -629,15 +582,6 @@ static void ThreadDebug(void*) {
             sendRTOSMsg(subqDriveDataStr);
         }
 
-        /*
-        // With malloc
-        taskENTER_CRITICAL();
-        char *msg = formatStringMalloc("with malloc: %d", 10);
-        sendRTOSMsg(msg);
-        vPortFree(msg);
-        taskEXIT_CRITICAL();
-        */
-
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
@@ -671,7 +615,7 @@ FLASHMEM __attribute__((noinline)) void setup() {
         }
     }
 
-    loggerQueue = xQueueCreate(LOGGER_BUFFER_SIZE, MAX_MSG_SIZE);
+    loggerQueue = xQueueCreate(LOGGER_BUFFER_SIZE, LOGGER_MSG_MAX_SIZE);
     scqkwfckDriveDataQueue = xQueueCreate(1, sizeof(SCQKGateWFCKDriveDataPoint));
     subqDriveDataQueue = xQueueCreate(1, sizeof(SUBQDriveDataPoint));
     subqRawDataQueue = xQueueCreate(SUBQ_QUEUE_SIZE, sizeof(byte) * SUBQ_PACKET_LENGTH);
@@ -685,10 +629,13 @@ FLASHMEM __attribute__((noinline)) void setup() {
     checkTaskCreation(xTaskCreate(ThreadCaptureSQCKandQFCKData, "sqckqfck", 256, NULL, 1, &tCaptureSQCKandQFCKDataHandler));
     checkTaskCreation(xTaskCreate(ThreadPower, "power", 256, NULL, 1, &tPowerHandler));
     checkTaskCreation(xTaskCreate(ThreadPu22mode, "pu22mode", 256, NULL, 1, &tPu22modeHandler));
-    checkTaskCreation(xTaskCreate(ThreadPalBiosPatch, "bios", 256, NULL, 1, &tPalBiosPatchHandler));
     checkTaskCreation(xTaskCreate(ThreadCaptureSUBQPackets, "subq", 256, NULL, 1, &tCaptureSUBQPacketsHandler));
     checkTaskCreation(xTaskCreate(ThreadCheckSUBQWobleArea, "wobble", 256, NULL, 1, &tCheckSUBQWobleAreaHandler));
     checkTaskCreation(xTaskCreate(ThreadInjectSCEX, "scex", 256, NULL, 1, &tInjectSCEXHandler));
+
+    if (BIOS_PATCH) {
+        checkTaskCreation(xTaskCreate(ThreadPalBiosPatch, "bios", 256, NULL, 1, &tPalBiosPatchHandler));
+    }
 
     if (DEBUG) {
         checkTaskCreation(xTaskCreate(ThreadLogger, "logger", 512, NULL, 1, &tLoggerHandler));
@@ -696,9 +643,7 @@ FLASHMEM __attribute__((noinline)) void setup() {
         //checkTaskCreation(xTaskCreate(ThreadStats, "stats", 512, NULL, 1, &tStatsHandler));
         //checkTaskCreation(xTaskCreate(ThreadDebug, "debug", 256, NULL, 1, &tDebugHandler));
         //checkTaskCreation(xTaskCreate(ThreadBlinker, "blinker", 128, NULL, 1, &tBlinkerHandler));
-    }
 
-    if (DEBUG) {
         Serial.println("Starting RTOS scheduler");
         Serial.flush();
     }
