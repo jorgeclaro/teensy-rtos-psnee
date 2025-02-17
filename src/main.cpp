@@ -306,10 +306,10 @@ SCQKGateWFCKDriveDataPoint captureSQCKandGateWFCK() {
     TickType_t now = xTaskGetTickCount();
 
     while ((xTaskGetTickCount() - now) < pdMS_TO_TICKS(BOARD_DETECTION_SAMPLE_PERIOD)) {
-        if(digitalReadFast(SQCK)==1) sqck_highs++;
-        if(digitalReadFast(SQCK)==0) sqck_lows++;
-        if(digitalReadFast(GATE_WFCK)==1) gate_wfck_highs++;
-        if(digitalReadFast(GATE_WFCK)==0) gate_wfck_lows++;
+        if (digitalReadFast(SQCK) == 1) sqck_highs++;
+        if (digitalReadFast(SQCK) == 0) sqck_lows++;
+        if (digitalReadFast(GATE_WFCK) == 1) gate_wfck_highs++;
+        if (digitalReadFast(GATE_WFCK) == 0) gate_wfck_lows++;
 
         // 1ms interval -> 1000 reads
         vTaskDelay(pdMS_TO_TICKS(BOARD_DETECTION_SAMPLE_INTERVAL));
@@ -518,7 +518,7 @@ static void ThreadPu22mode(void*) {
 
     for (;;) {
         xSemaphoreTake(pu22modeSem, portMAX_DELAY);
-        if(xQueuePeek(powerQueue, &power, pdMS_TO_TICKS(0)) == pdPASS) {
+        if (xQueuePeek(powerQueue, &power, pdMS_TO_TICKS(0)) == pdPASS) {
             if (power) {
                 if (xQueuePeek(scqkwfckDriveDataQueue, &p, pdMS_TO_TICKS(0)) == pdPASS) {
                     checkPu22mode(p.gate_wfck_lows);
@@ -588,7 +588,7 @@ static void ThreadInjectSCEX(void*) {
 
     for (;;) {
         if (xQueuePeek(scexQueue, &scexAllow, pdMS_TO_TICKS(0)) == pdPASS) {
-            if(scexAllow) {
+            if (scexAllow) {
                 injectSCEXLoop();
             }
         }
@@ -625,7 +625,7 @@ static void ThreadDebug(void*) {
         if (xQueuePeek(subqDriveDataQueue, &p1, pdMS_TO_TICKS(0)) == pdPASS) {
             size_t subqDriveDataStrLenght = 20;
             char subqDriveDataStr[subqDriveDataStrLenght];
-            snprintf(subqDriveDataStr, subqDriveDataStrLenght, "game: %d, wobble: %d", p1.isGameDisk, p1.checkingWobble);
+            snprintf(subqDriveDataStr, subqDriveDataStrLenght, "game: %d wobble: %d", p1.isGameDisk, p1.checkingWobble);
             sendRTOSMsg(subqDriveDataStr);
         }
 
