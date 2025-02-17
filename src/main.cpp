@@ -7,18 +7,6 @@
 #include <task.h>
 #include <stream_buffer.h>
 
-#define DEBUG true
-
-// RTOS config
-#define LOGGER_BUFFER_SIZE 128
-#define MAX_MSG_SIZE 100
-#define MAX_TASK_NUM 20
-
-// PSX config
-#define SUBQ_PACKET_LENGTH 12
-#define SUBQ_QUEUE_SIZE 1
-#define SCEX_INJ_TIMEOUT_MS 5000
-
 // Pin definitions
 #define BIOS_A18 4      // connect to PSOne BIOS A18 (pin 31 on that chip)
 #define BIOS_D2  5      // connect to PSOne BIOS D2 (pin 15 on that chip)
@@ -27,58 +15,72 @@
 #define DATA 8          // connect to point 6 in old modchip diagrams
 #define GATE_WFCK 9     // connect to point 5 in old modchip diagrams
 
+#define DEBUG true
+
+// RTOS config
+#define LOGGER_BUFFER_SIZE 128
+#define MAX_MSG_SIZE 100
+#define MAX_TASK_NUM 20
+
+// SUBQ Packet config
+#define SUBQ_PACKET_LENGTH 12
+#define SUBQ_QUEUE_SIZE 1
+
+// Scex inhection timeout
+#define SCEX_INJ_TIMEOUT_MS 5000
+
+// Microseconds 250 bits/s (3950 ~ 4100)
+#define SCEX_INJECTION_BITS_DELAY 4000
+
+// Milliseconds (PU-22+ work best with 80 to 100)
+#define SCEX_INJECTION_LOOP_DELAY_PU22 90
+
+// Milliseconds (72 work best with Oldcrow)
+#define SCEX_INJECTION_LOOP_DELAY_OLDCROW 72
+
+// Number of injection loops (2 to cover all boards)
+#define SCEX_INJECTION_LOOPS 2
+
+// Number of attempts for SCEX (3 to cover all boards)
+#define SCEX_INJECTION_ATTEMPTS 3
+
+// Microseconds 2000
+#define SUBQ_CAPTURE_TIMEOUT 2000
+
+// Milliseconds 1000
+#define BOARD_DETECTION_SAMPLE_PERIOD 1000
+
+// Milliseconds 1
+#define BOARD_DETECTION_SAMPLE_INTERVAL 1
+
+// Readings in BOARD_DETECTION_SAMPLE_PERIOD 20
+#define BOARD_DETECTION_GATE_WFCK_LOWS_THRESHOLD 20
+
+// Readings in BOARD_DETECTION_SAMPLE_PERIOD 100
+#define BOARD_DETECTION_SQCK_HIGHS_THRESHOLD 100
+
+// Milliseconds 1350
+#define BIOS_PATCH_STAGE1_DELAY 1250
+
+// Number of attempts for stage1 2
+#define BIOS_PATCH_STAGE1_ATTEMPTS 1
+
+// Microseconds 17
+#define BIOS_PATCH_STAGE2_DELAY 17
+
+// Microseconds 4
+#define BIOS_PATCH_STAGE3_DELAY 4
+
+// Milliseconds 3000
+#define BIOS_PATCH_TIMEOUT 2000
+
 // SCEX data
 static const unsigned char SCEEData[] = {0b01011001, 0b11001001, 0b01001011, 0b01011101, 0b11101010, 0b00000010};
 static const unsigned char SCEAData[] = {0b01011001, 0b11001001, 0b01001011, 0b01011101, 0b11111010, 0b00000010};
 static const unsigned char SCEIData[] = {0b01011001, 0b11001001, 0b01001011, 0b01011101, 0b11011010, 0b00000010};
 
-// Specified region
+// Specified target region
 static const char region = 'e';
-
-// microseconds 250 bits/s (3950 ~ 4100)
-static const int scex_injection_bits_delay = 4000;
-
-// milliseconds (PU-22+ work best with 80 to 100)
-static const int scex_injection_loop_delay_pu22 = 90;
-
-// milliseconds (72 work best with oldcrow)
-static const int scex_injection_loop_delay_oldcrow = 72;
-
-// nr injection loops (2 to cover all boards)
-static const int scex_injection_loops = 2;
-
-// nr attempts for scex (3 to cover all boards)
-static const int scex_injection_attempts = 3;
-
-// microseconds 2000
-static const int subq_capture_timeout = 2000;
-
-// milliseconds 1000
-static const int board_detection_sample_period = 1000;
-
-// milliseconds 1
-static const int board_detection_sample_interval = 1;
-
-// readings in board_detection_sample_period 20
-static const int board_detection_gate_wfck_lows_threshold = 20;
-
-// readings in board_detection_sample_period 100
-static const int board_detection_sqck_highs_threshold = 100;
-
-// milliseconds 1350
-static const int bios_patch_stage1_delay = 1250;
-
-// nr attempts stage1 2
-static const int bios_patch_stage1_attempts = 1;
-
-// microseconds 17
-static const int bios_patch_stage2_delay = 17;
-
-// microseconds 4
-static const int bios_patch_stage3_delay = 4;
-
-// milliseconds 3000
-static const int bios_patch_timeout = 2000;
 
 QueueHandle_t loggerQueue;
 QueueHandle_t scqkwfckDriveDataQueue;
@@ -122,7 +124,6 @@ typedef struct {
     boolean isGameDisk;
     boolean checkingWobble;
 } SUBQDriveDataPoint;
-
 
 
 /*
@@ -194,13 +195,13 @@ void patchBios() {
 
     bool pulseFound = false;
 
-    for (int i = 0; i < bios_patch_stage1_attempts; i++) {
+    for (int i = 0; i < BIOS_PATCH_STAGE1_ATTEMPTS; i++) {
         sendRTOSMsg("Waiting for stage 1 A18 intro pulse");
 
         TickType_t now = xTaskGetTickCount();
 
         while (!digitalReadFast(BIOS_A18)) {
-            if ((xTaskGetTickCount() - now) > pdMS_TO_TICKS(bios_patch_timeout)) {
+            if ((xTaskGetTickCount() - now) > pdMS_TO_TICKS(BIOS_PATCH_TIMEOUT)) {
                 pulseFound = false;
                 break;
             }
@@ -210,19 +211,19 @@ void patchBios() {
         
         sendRTOSMsg("Stage 1 A18 intro pulse found");
 
-        vTaskDelay(bios_patch_stage1_delay);
+        vTaskDelay(BIOS_PATCH_STAGE1_DELAY);
     }
 
     sendRTOSMsg("A18 intro pulse exausted all attempts");
     
     if (pulseFound) {
         // max 17us (maximize this when tuning!)
-        delayMicrosecondsDWT(bios_patch_stage2_delay);
+        delayMicrosecondsDWT(BIOS_PATCH_STAGE2_DELAY);
         digitalWriteFast(BIOS_A18, arduino::LOW);
         digitalWriteFast(BIOS_D2, arduino::HIGH);
 
         // min 2us (minimize this when tuning, after maximizing first us delay!)
-        delayMicrosecondsDWT(bios_patch_stage3_delay);
+        delayMicrosecondsDWT(BIOS_PATCH_STAGE3_DELAY);
         digitalWriteFast(BIOS_D2, arduino::LOW);
     } else {
         sendRTOSMsg("Failed to patch PAL BIOS");
@@ -243,7 +244,7 @@ void checkPower(unsigned int sqck_highs) {
     }
 
     // Evaluate the current power state
-    boolean power_tmp = (sqck_highs > board_detection_sqck_highs_threshold);
+    boolean power_tmp = (sqck_highs > BOARD_DETECTION_SQCK_HIGHS_THRESHOLD);
 
     // Only proceed if the power state has changed
     if (power != power_tmp) {
@@ -280,7 +281,7 @@ void checkPu22mode(unsigned int gate_wfck_lows) {
     }
 
     // Evaluate the current pu22mode state
-    boolean pu22mode_tmp = (gate_wfck_lows > board_detection_gate_wfck_lows_threshold);
+    boolean pu22mode_tmp = (gate_wfck_lows > BOARD_DETECTION_GATE_WFCK_LOWS_THRESHOLD);
 
     // Only proceed if the pu22mode state has changed
     if (pu22mode != pu22mode_tmp) {
@@ -304,14 +305,14 @@ SCQKGateWFCKDriveDataPoint captureSQCKandGateWFCK() {
 
     TickType_t now = xTaskGetTickCount();
 
-    while ((xTaskGetTickCount() - now) < pdMS_TO_TICKS(board_detection_sample_period)) {
+    while ((xTaskGetTickCount() - now) < pdMS_TO_TICKS(BOARD_DETECTION_SAMPLE_PERIOD)) {
         if(digitalReadFast(SQCK)==1) sqck_highs++;
         if(digitalReadFast(SQCK)==0) sqck_lows++;
         if(digitalReadFast(GATE_WFCK)==1) gate_wfck_highs++;
         if(digitalReadFast(GATE_WFCK)==0) gate_wfck_lows++;
 
         // 1ms interval -> 1000 reads
-        vTaskDelay(pdMS_TO_TICKS(board_detection_sample_interval));
+        vTaskDelay(pdMS_TO_TICKS(BOARD_DETECTION_SAMPLE_INTERVAL));
     }
 
     SCQKGateWFCKDriveDataPoint p = {
@@ -333,7 +334,7 @@ void captureSUBQPackets(byte *scbuf_ptr) {
         for (byte bitpos = 0; bitpos < 8; bitpos++) {
             while (digitalReadFast(SQCK) == 1) {
                 // Convert timeout from microseconds to ticks
-                TickType_t timeoutTicks = subq_capture_timeout / (1000000 / configTICK_RATE_HZ);
+                TickType_t timeoutTicks = SUBQ_CAPTURE_TIMEOUT / (1000000 / configTICK_RATE_HZ);
                 
                 if ((xTaskGetTickCount() - now) > timeoutTicks) {
                     // Reset SUBQ packet stream
@@ -413,23 +414,23 @@ void injectSCEXLoop() {
     sendRTOSMsg("SCEX inj begin");
     digitalWriteFast(arduino::LED_BUILTIN, arduino::HIGH);
 
-    for (size_t loop_counter = 0; loop_counter < scex_injection_loops; loop_counter++) {
-        for (size_t attempts_counter = 0; attempts_counter < scex_injection_attempts; attempts_counter++) {
+    for (size_t loop_counter = 0; loop_counter < SCEX_INJECTION_LOOPS; loop_counter++) {
+        for (size_t attempts_counter = 0; attempts_counter < SCEX_INJECTION_ATTEMPTS; attempts_counter++) {
             for (byte bit_counter = 0; bit_counter < 44; bit_counter++) {
                 if (!readBit(bit_counter, region == 'e' ? SCEEData : region == 'a' ? SCEAData : SCEIData)) {
                     pinMode(DATA, arduino::OUTPUT);
                     digitalWriteFast(DATA, arduino::LOW);
-                    delayMicrosecondsDWT(scex_injection_bits_delay);
+                    delayMicrosecondsDWT(SCEX_INJECTION_BITS_DELAY);
                 } else {
                     if (pu22mode) {
                         pinMode(DATA, arduino::OUTPUT);
                         uint32_t startCycles = ARM_DWT_CYCCNT;  // Capture start cycle count
                         do {
                             digitalWriteFast(DATA, digitalReadFast(GATE_WFCK));
-                        } while ((ARM_DWT_CYCCNT - startCycles) < (F_CPU / 1000000) * scex_injection_bits_delay);
+                        } while ((ARM_DWT_CYCCNT - startCycles) < (F_CPU / 1000000) * SCEX_INJECTION_BITS_DELAY);
                     } else {
                         pinMode(DATA, arduino::INPUT);
-                        delayMicrosecondsDWT(scex_injection_bits_delay);
+                        delayMicrosecondsDWT(SCEX_INJECTION_BITS_DELAY);
                     }
                 }
             }
@@ -439,7 +440,7 @@ void injectSCEXLoop() {
         }
 
         // HC-05 waits for a bit of silence (pin low) before it begins decoding
-        vTaskDelay(pdMS_TO_TICKS(pu22mode ? scex_injection_loop_delay_pu22 : scex_injection_loop_delay_oldcrow));
+        vTaskDelay(pdMS_TO_TICKS(pu22mode ? SCEX_INJECTION_LOOP_DELAY_PU22 : SCEX_INJECTION_LOOP_DELAY_OLDCROW));
     }
 
     if (!pu22mode) {
