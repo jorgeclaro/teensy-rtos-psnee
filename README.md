@@ -4,7 +4,7 @@ Open source stealth modchip for the Sony Playstation 1 based on [freeRTOS](https
 
 Includes PSOne PAL BIOS Patch
 
-![teensy-psone](./images/teensy-psone.png)
+![teensy-psone](./images/teensy-psone.jpg)
 
 ## Dependencies
 
