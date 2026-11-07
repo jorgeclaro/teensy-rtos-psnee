@@ -38,7 +38,7 @@
 #define BIOS_PATCH_STAGE1_ATTEMPTS 1                    // Number of attempts for BIOS patch stage 1 (1)
 #define BIOS_PATCH_STAGE2_DELAY 17                      // Delay for BIOS patch stage 2 in microseconds (17)
 #define BIOS_PATCH_STAGE3_DELAY 4                       // Delay for BIOS patch stage 3 in microseconds (4)
-#define BIOS_PATCH_TIMEOUT 2000                         // Timeout for BIOS patch in milliseconds (3000)
+#define BIOS_PATCH_TIMEOUT 2000                         // Timeout for BIOS patch in milliseconds (2000)
 
 // SCEX data
 static const unsigned char SCEEData[] = {0b01011001, 0b11001001, 0b01001011, 0b01011101, 0b11101010, 0b00000010};
@@ -175,7 +175,7 @@ void patchBios() {
         
         sendRTOSMsg("Stage 1 A18 intro pulse found");
 
-        vTaskDelay(BIOS_PATCH_STAGE1_DELAY);
+        vTaskDelay(pdMS_TO_TICKS(BIOS_PATCH_STAGE1_DELAY));
     }
 
     sendRTOSMsg("A18 intro pulse exausted all attempts");
@@ -463,7 +463,7 @@ static void ThreadCaptureSQCKandQFCKData(void*) {
         xQueueOverwrite(scqkwfckDriveDataQueue, &p);
         xSemaphoreGive(powerSem);
         xSemaphoreGive(pu22modeSem);
-        vTaskDelay(250);
+        vTaskDelay(pdMS_TO_TICKS(250));
     }
 }
 
