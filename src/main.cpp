@@ -56,6 +56,16 @@ QueueHandle_t pu22modeQueue;
 QueueHandle_t powerQueue;
 QueueHandle_t scexQueue;
 
+// Cycle counter value taken when the wobble task notifies the scex task.
+// Used only to measure the wake-up latency (see ThreadInjectSCEX).
+static volatile uint32_t scexNotifyCycles = 0;
+
+// "Please detect the board type again": set when the power state changes,
+// cleared by the pu22mode task just before it does the detection. A flag
+// (unlike vTaskSuspend/vTaskResume) cannot be lost if the set arrives while
+// the pu22mode task is busy. Starts true so the first power-on is checked.
+static volatile boolean pu22modeArmed = true;
+
 SemaphoreHandle_t powerSem;
 SemaphoreHandle_t pu22modeSem;
 SemaphoreHandle_t injectScexSem;
@@ -115,10 +125,15 @@ void enableDWT() {
 void sendRTOSMsg(const char* message) {
     if (DEBUG) {
         if (uxQueueSpacesAvailable(loggerQueue) > 0) {
-            size_t logLength = configMAX_TASK_NAME_LEN + strlen(message) + 3;
-            char log[logLength];
-            snprintf(log, logLength, "%s: %s", pcTaskGetName(NULL), message);
-            xQueueSend(loggerQueue, log, portMAX_DELAY);
+            // The queue copies LOGGER_MSG_MAX_SIZE bytes per item, so the source
+            // buffer must be exactly that size. snprintf truncates and always
+            // adds the terminating NUL.
+            char log[LOGGER_MSG_MAX_SIZE];
+            snprintf(log, sizeof(log), "%s: %s", pcTaskGetName(NULL), message);
+            // Timeout 0: never block the caller. If another task filled the last
+            // slot after the check above, this message is dropped instead of
+            // stalling a timing-sensitive task.
+            xQueueSend(loggerQueue, log, 0);
                 
             // With malloc
             //char* log = formatStringMalloc("%s: %s", pcTaskGetName(NULL), message);
@@ -213,8 +228,8 @@ void checkPower(unsigned int sqck_highs) {
         power = power_tmp;
         xQueueOverwrite(powerQueue, &power);
 
-        sendRTOSMsg("Resuming pu22mode task");
-        vTaskResume(tPu22modeHandler);
+        sendRTOSMsg("Re-arming pu22mode detection");
+        pu22modeArmed = true;
     }
 }
 
@@ -471,13 +486,17 @@ static void ThreadPu22mode(void*) {
 
     for (;;) {
         xSemaphoreTake(pu22modeSem, portMAX_DELAY);
+        if (!pu22modeArmed) {
+            continue;  // already detected for this power-on; wait for the next power change
+        }
         if (xQueuePeek(powerQueue, &power, pdMS_TO_TICKS(0)) == pdPASS) {
             if (power) {
+                // Clear BEFORE detecting: if the power state changes again while
+                // we are busy, the flag is set again and nothing is lost.
+                pu22modeArmed = false;
                 if (xQueuePeek(scqkwfckDriveDataQueue, &p, pdMS_TO_TICKS(0)) == pdPASS) {
                     checkPu22mode(p.gate_wfck_lows);
                 }
-                sendRTOSMsg("Suspending");
-                vTaskSuspend(tPu22modeHandler);
             }
         }
     }
@@ -520,6 +539,7 @@ static void ThreadCheckSUBQWobleArea(void*) {
 
     for (;;) {
         xQueueReceive(subqRawDataQueue, &scbuf, portMAX_DELAY);
+        boolean wasAllowed = scexAllow;
         p = parseSUBQPacket(scbuf_ptr);
 
         if (p.isGameDisk || p.checkingWobble) {
@@ -533,17 +553,37 @@ static void ThreadCheckSUBQWobleArea(void*) {
 
         xQueueOverwrite(scexQueue, &scexAllow);
         xQueueOverwrite(subqDriveDataQueue, &p);
+
+        // Wake the scex task only when injection becomes allowed. The scex task
+        // has a higher priority, so it preempts this task right away.
+        if (scexAllow && !wasAllowed) {
+            scexNotifyCycles = ARM_DWT_CYCCNT;
+            xTaskNotifyGive(tInjectSCEXHandler);
+        }
     }
 }
 
 static void ThreadInjectSCEX(void*) {
     boolean scexAllow = false;
+    uint32_t wakeCycles = 0;
+    boolean haveLatency = false;
 
     for (;;) {
-        if (xQueuePeek(scexQueue, &scexAllow, pdMS_TO_TICKS(0)) == pdPASS) {
-            if (scexAllow) {
-                injectSCEXLoop();
+        if (xQueuePeek(scexQueue, &scexAllow, pdMS_TO_TICKS(0)) == pdPASS && scexAllow) {
+            injectSCEXLoop();
+
+            // Logged after the loop so it cannot delay the injection itself.
+            if (haveLatency) {
+                char msg[40];
+                snprintf(msg, sizeof(msg), "wake latency: %lu cycles", (unsigned long)wakeCycles);
+                sendRTOSMsg(msg);
+                haveLatency = false;
             }
+        } else {
+            // Nothing to do: sleep until the wobble task notifies us.
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            wakeCycles = ARM_DWT_CYCCNT - scexNotifyCycles;
+            haveLatency = true;
         }
     }
 }
@@ -631,7 +671,7 @@ FLASHMEM __attribute__((noinline)) void setup() {
     checkTaskCreation(xTaskCreate(ThreadPu22mode, "pu22mode", 256, NULL, 1, &tPu22modeHandler));
     checkTaskCreation(xTaskCreate(ThreadCaptureSUBQPackets, "subq", 256, NULL, 1, &tCaptureSUBQPacketsHandler));
     checkTaskCreation(xTaskCreate(ThreadCheckSUBQWobleArea, "wobble", 256, NULL, 1, &tCheckSUBQWobleAreaHandler));
-    checkTaskCreation(xTaskCreate(ThreadInjectSCEX, "scex", 256, NULL, 1, &tInjectSCEXHandler));
+    checkTaskCreation(xTaskCreate(ThreadInjectSCEX, "scex", 256, NULL, 2, &tInjectSCEXHandler));
 
     if (BIOS_PATCH) {
         checkTaskCreation(xTaskCreate(ThreadPalBiosPatch, "bios", 256, NULL, 1, &tPalBiosPatchHandler));
