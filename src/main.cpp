@@ -54,7 +54,11 @@ QueueHandle_t subqDriveDataQueue;
 QueueHandle_t subqRawDataQueue;
 QueueHandle_t pu22modeQueue;
 QueueHandle_t powerQueue;
-QueueHandle_t scexQueue;
+
+// "Injection is currently allowed". Written only by the wobble task and read
+// only by the scex task, so a plain volatile flag is enough. The wobble task
+// sets it BEFORE it notifies the scex task. Starts false.
+static volatile boolean scexAllowed = false;
 
 // Cycle counter value taken when the wobble task notifies the scex task.
 // Used only to measure the wake-up latency (see ThreadInjectSCEX).
@@ -68,7 +72,6 @@ static volatile boolean pu22modeArmed = true;
 
 SemaphoreHandle_t powerSem;
 SemaphoreHandle_t pu22modeSem;
-SemaphoreHandle_t injectScexSem;
 SemaphoreHandle_t patchBiosSem;
 
 TaskHandle_t tLoggerHandler;
@@ -134,11 +137,6 @@ void sendRTOSMsg(const char* message) {
             // slot after the check above, this message is dropped instead of
             // stalling a timing-sensitive task.
             xQueueSend(loggerQueue, log, 0);
-                
-            // With malloc
-            //char* log = formatStringMalloc("%s: %s", pcTaskGetName(NULL), message);
-            //xQueueSend(loggerQueue, log, portMAX_DELAY);
-            //vPortFree(log);
         }
     }
 }
@@ -454,7 +452,6 @@ static void ThreadLogger(void*) {
    for (;;) {
         if (xQueueReceive(loggerQueue, &receivedMessage, portMAX_DELAY)) {
             Serial.println(receivedMessage);
-            vTaskDelay(100);
         }
     }
 }
@@ -519,7 +516,7 @@ static void ThreadCaptureSUBQPackets(void*) {
     }
 }
 
-static void ThreadPrintHexSUBQPackets(void*) {
+[[maybe_unused]] static void ThreadPrintHexSUBQPackets(void*) {
     byte scbuf[SUBQ_PACKET_LENGTH] = { 0 };
     byte *scbuf_ptr = scbuf;
 
@@ -551,7 +548,7 @@ static void ThreadCheckSUBQWobleArea(void*) {
             sendRTOSMsg("SCEX inj timeout");
         }
 
-        xQueueOverwrite(scexQueue, &scexAllow);
+        scexAllowed = scexAllow;
         xQueueOverwrite(subqDriveDataQueue, &p);
 
         // Wake the scex task only when injection becomes allowed. The scex task
@@ -564,12 +561,11 @@ static void ThreadCheckSUBQWobleArea(void*) {
 }
 
 static void ThreadInjectSCEX(void*) {
-    boolean scexAllow = false;
     uint32_t wakeCycles = 0;
     boolean haveLatency = false;
 
     for (;;) {
-        if (xQueuePeek(scexQueue, &scexAllow, pdMS_TO_TICKS(0)) == pdPASS && scexAllow) {
+        if (scexAllowed) {
             injectSCEXLoop();
 
             // Logged after the loop so it cannot delay the injection itself.
@@ -588,14 +584,14 @@ static void ThreadInjectSCEX(void*) {
     }
 }
 
-static void ThreadStats(void*) {
+[[maybe_unused]] static void ThreadStats(void*) {
    for (;;) {
         printStats();
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }
 
-static void ThreadDebug(void*) {
+[[maybe_unused]] static void ThreadDebug(void*) {
     boolean pu22mode = false;
     boolean power = false;
     SUBQDriveDataPoint p1;
@@ -626,7 +622,7 @@ static void ThreadDebug(void*) {
     }
 }
 
-static void ThreadBlinker(void*) {
+[[maybe_unused]] static void ThreadBlinker(void*) {
     for (;;) {    
         vTaskDelay(pdMS_TO_TICKS(1000));
         digitalWriteFast(arduino::LED_BUILTIN, arduino::HIGH);
@@ -661,7 +657,6 @@ FLASHMEM __attribute__((noinline)) void setup() {
     subqRawDataQueue = xQueueCreate(SUBQ_QUEUE_SIZE, sizeof(byte) * SUBQ_PACKET_LENGTH);
     pu22modeQueue = xQueueCreate(1, sizeof(boolean));
     powerQueue = xQueueCreate(1, sizeof(boolean));
-    scexQueue = xQueueCreate(1, sizeof(boolean));
     powerSem = xSemaphoreCreateBinary();
     pu22modeSem = xSemaphoreCreateBinary();
     patchBiosSem = xSemaphoreCreateBinary();
@@ -679,10 +674,19 @@ FLASHMEM __attribute__((noinline)) void setup() {
 
     if (DEBUG) {
         checkTaskCreation(xTaskCreate(ThreadLogger, "logger", 512, NULL, 1, &tLoggerHandler));
-        //checkTaskCreation(xTaskCreate(ThreadPrintHexSUBQPackets, "hex", 256, NULL, 1, &tPrintHexSUBQPacketsHandler));
-        //checkTaskCreation(xTaskCreate(ThreadStats, "stats", 512, NULL, 1, &tStatsHandler));
-        //checkTaskCreation(xTaskCreate(ThreadDebug, "debug", 256, NULL, 1, &tDebugHandler));
-        //checkTaskCreation(xTaskCreate(ThreadBlinker, "blinker", 128, NULL, 1, &tBlinkerHandler));
+        // Optional debug tasks, enabled with build flags (see platformio.ini).
+#ifdef DEBUG_HEX_SUBQ
+        checkTaskCreation(xTaskCreate(ThreadPrintHexSUBQPackets, "hex", 256, NULL, 1, &tPrintHexSUBQPacketsHandler));
+#endif
+#ifdef DEBUG_STATS
+        checkTaskCreation(xTaskCreate(ThreadStats, "stats", 512, NULL, 1, &tStatsHandler));
+#endif
+#ifdef DEBUG_STATE
+        checkTaskCreation(xTaskCreate(ThreadDebug, "debug", 256, NULL, 1, &tDebugHandler));
+#endif
+#ifdef DEBUG_BLINK
+        checkTaskCreation(xTaskCreate(ThreadBlinker, "blinker", 128, NULL, 1, &tBlinkerHandler));
+#endif
 
         Serial.println("Starting RTOS scheduler");
         Serial.flush();
