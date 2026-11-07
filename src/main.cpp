@@ -644,6 +644,11 @@ FLASHMEM __attribute__((noinline)) void setup() {
         Serial.begin(115200);
         Serial.println(PSTR("Booting FreeRTOS kernel " tskKERNEL_VERSION_NUMBER ""));
         Serial.println(PSTR("Built by gcc " __VERSION__ " (newlib " _NEWLIB_VERSION ") on " __DATE__ ""));
+        // All task delays are converted with pdMS_TO_TICKS, so they follow the
+        // tick rate; printing it makes the tick length visible at boot.
+        Serial.print("RTOS tick rate: ");
+        Serial.print((unsigned long)configTICK_RATE_HZ);
+        Serial.println(" Hz");
         if (CrashReport) {
             Serial.print(CrashReport);
             Serial.println();
